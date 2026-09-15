@@ -45,6 +45,9 @@ const loginPageDuration = new Trend('login_page_duration');
 const loginDuration = new Trend('login_duration');
 const autocompleteDuration = new Trend('autocomplete_duration');
 const searchDuration = new Trend('search_duration');
+const addToCartDuration = new Trend('add_to_cart_duration');
+const addToCartAjaxDuration = new Trend('add_to_cart_ajax_duration');
+const viewCartDuration = new Trend('view_cart_duration');
 
 // Per-request-type error rate (non-200 responses).
 const homepageErrors = new Rate('homepage_errors');
@@ -55,6 +58,9 @@ const loginPageErrors = new Rate('login_page_errors');
 const loginErrors = new Rate('login_errors');
 const autocompleteErrors = new Rate('autocomplete_errors');
 const searchErrors = new Rate('search_errors');
+const addToCartErrors = new Rate('add_to_cart_errors');
+const addToCartAjaxErrors = new Rate('add_to_cart_ajax_errors');
+const viewCartErrors = new Rate('view_cart_errors');
 
 // ---- Load profile ----
 
@@ -72,9 +78,14 @@ export const options = {
         //     exec: 'browse',
         //     stages: LOAD_STAGES,
         // },
-        search: {
+        // search: {
+        //     executor: 'ramping-vus',
+        //     exec: 'search',
+        //     stages: LOAD_STAGES,
+        // },
+        addToCart: {
             executor: 'ramping-vus',
-            exec: 'search',
+            exec: 'addToCart',
             stages: LOAD_STAGES,
         }
 
@@ -92,6 +103,9 @@ export const options = {
         product_details_duration: ['p(95) < 2000', 'p(99) < 3000'],
         autocomplete_duration: ['p(95) < 2000', 'p(99) < 3000'],
         search_duration: ['p(95) < 2000', 'p(99) < 3000'],
+        add_to_cart_duration: ['p(95) < 2000', 'p(99) < 3000'],
+        add_to_cart_ajax_duration: ['p(95) < 2000', 'p(99) < 3000'],
+        view_cart_duration: ['p(95) < 2000', 'p(99) < 3000'],
 
         homepage_errors: ['rate < 0.01'],
         category_errors: ['rate < 0.01'],
@@ -101,6 +115,9 @@ export const options = {
         login_errors: ['rate < 0.01'],
         autocomplete_errors: ['rate < 0.01'],
         search_errors: ['rate < 0.01'],
+        add_to_cart_errors: ['rate < 0.01'],
+        add_to_cart_ajax_errors: ['rate < 0.01'],
+        view_cart_errors: ['rate < 0.01'],
     }
 }
 
@@ -159,6 +176,12 @@ export function getProductDetails(product) {
     productDetailsDuration.add(res.timings.duration);
     productDetailsErrors.add(res.status !== 200);
     check(res, { '200': (r) => r.status === 200 });
+
+    const productId = res.html("#product_page_product_id").attr("value");
+    const productCustomizationId = res.html("#product_customization_id").attr("value");
+    const token = res.html("#add-to-cart-or-refresh input[name='token']").attr("value");
+
+    return { productId, productCustomizationId, token }
 }
 
 export function getLoginPage() {
@@ -188,8 +211,45 @@ export function login() {
     sleep(THINK_TIME.MEDIUM);
 }
 
-export function addProductToCart() {
+export function addProductToCart(productId, productCustomizationId, token, qty = 1) {
+    const headers = { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'Accept': 'application/json, text/javascript, */*; q=0.01' };
+    const formData = {
+        token: token,
+        id_product: productId,
+        id_customization: productCustomizationId,
+        qty: qty,
+        add: 1,
+        action: 'update',
+    };
+    const res = http.post(`${hostname}/${lang}/cart`, formData, { headers: headers, tags: { name: '[POST] Add to cart' } });
+    logRequest(res);
+    addToCartDuration.add(res.timings.duration);
+    addToCartErrors.add(res.status !== 200);
+    check(res, { '200': (r) => r.status === 200 });
 
+    const ajaxRes = http.post(`${hostname}/${lang}/module/ps_shoppingcart/ajax`, {
+        id_customization: productCustomizationId,
+        id_product_attribute: 0,
+        id_product: productId,
+        action: 'add-to-cart',
+    }, { headers: { 'X-Requested-With': 'XMLHttpRequest' }, tags: { name: '[POST] Ajax Add to cart' } })
+    logRequest(ajaxRes);
+    addToCartAjaxDuration.add(ajaxRes.timings.duration);
+    addToCartAjaxErrors.add(ajaxRes.status !== 200);
+    check(ajaxRes, { '200': (r) => r.status === 200 });
+}
+
+export function viewCart() {
+    const res = http.get(`${hostname}/${lang}/cart?action=show`, { tags: { name: '[GET] View cart' } });
+    logRequest(res);
+    viewCartDuration.add(res.timings.duration);
+    viewCartErrors.add(res.status !== 200);
+
+    const cartQty = parseInt(res.html('.cart-products-count').text().replace(/\D/g, ''), 10);
+    check(res, {
+        '200': (r) => r.status === 200,
+        'cart quantity is not 0': () => cartQty > 0,
+    });
 }
 
 export function autocomplete(term) {
@@ -290,7 +350,46 @@ export function search() {
 }
 
 export function addToCart() {
+    // Login or Guest
+    if (!isGuestVU && !hasLoggedIn) {
+        login();
+        hasLoggedIn = true;
+    }
 
+    const { mainCategories, subCategories } = getHomepage();
+    sleep(THINK_TIME.LOW);
+
+    const category = getRandom(mainCategories);
+    if (category === null) {
+        console.warn("No main categories found on homepage, skipping rest of iteration");
+        return;
+    }
+    sleep(THINK_TIME.MEDIUM);
+    getCategory(category);
+
+    const subCategory = getRandom(subCategories);
+    if (subCategory === null) {
+        console.warn("No sub-categories found on homepage, skipping rest of iteration");
+        return;
+    }
+    sleep(THINK_TIME.LOW);
+    const products = getSubCategory(subCategory);
+
+    const product = getRandom(products);
+    if (product === null) {
+        console.warn(`No products found in sub-category "${subCategory}", skipping rest of iteration`);
+        return;
+    }
+    sleep(THINK_TIME.MEDIUM);
+    const { productId, productCustomizationId, token } = getProductDetails(product);
+
+    sleep(THINK_TIME.LOW);
+    addProductToCart(productId, productCustomizationId, token);
+
+    sleep(THINK_TIME.LOW);
+    viewCart();
+
+    sleep(THINK_TIME.MEDIUM);
 }
 
 export function updateCart() {
