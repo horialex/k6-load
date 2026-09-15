@@ -1,12 +1,15 @@
 import { sleep, check, group } from 'k6'
 import http from 'k6/http'
 import { Trend, Rate } from 'k6/metrics'
-import { extractSlugs, getRandom, logRequest, isLoggedIn, get_random } from './utils/utils.js'
+import { extractSlugs, getRandom, logRequest, isLoggedIn, getSearchTerm } from './utils/utils.js'
 
 // ---- Config ----
 
 const hostname = __ENV.HOSTNAME || "http://172.22.4.19";
 const lang = __ENV.LANGUAGE || "en";
+
+// 50% of users will browse, 30% will search and 20% will add to cart
+const JOURNEY_SHARE = { browse: 0.5, search: 0.3, addToCart: 0.2 };
 
 // In seconds
 const THINK_TIME = {
@@ -23,9 +26,9 @@ const SELECTORS = {
 }
 
 const USER = {
-    email: 'horatiu.encian@evozon.com',
-    password: 'horatiu123',
-    username: 'Encian Horatiu'
+    email: '',
+    password: '',
+    username: ''
 }
 
 // Traffic mix for the browse scenario. Each VU is assigned a role once, when its JS
@@ -70,23 +73,26 @@ const LOAD_STAGES = [
     { duration: '20s', target: 30 }, // stable load
     { duration: '10s', target: 0 }, // ramp-down to 0 users
 ]
+// Scale the stages to achieve a jurney distribution of vus
+const scaleStages = (share) => LOAD_STAGES.map(s => ({ ...s, target: Math.round(s.target * share) }));
+
 
 export const options = {
     scenarios: {
-        // browse: {
-        //     executor: 'ramping-vus',
-        //     exec: 'browse',
-        //     stages: LOAD_STAGES,
-        // },
-        // search: {
-        //     executor: 'ramping-vus',
-        //     exec: 'search',
-        //     stages: LOAD_STAGES,
-        // },
+        browse: {
+            executor: 'ramping-vus',
+            exec: 'browse',
+            stages: scaleStages(JOURNEY_SHARE.browse),
+        },
+        search: {
+            executor: 'ramping-vus',
+            exec: 'search',
+            stages: scaleStages(JOURNEY_SHARE.search),
+        },
         addToCart: {
             executor: 'ramping-vus',
             exec: 'addToCart',
-            stages: LOAD_STAGES,
+            stages: scaleStages(JOURNEY_SHARE.addToCart),
         }
 
     },
@@ -271,10 +277,6 @@ export function searchProduct(term) {
     return extractSlugs(res, SELECTORS.PRODUCT);
 }
 
-export function updateCartQuantity() {
-
-}
-
 
 
 // ---- Scenarios - User Jurneys ----
@@ -312,8 +314,6 @@ export function browse() {
     }
     sleep(THINK_TIME.MEDIUM);
     getProductDetails(product);
-
-    sleep(THINK_TIME.MEDIUM);
 }
 
 
@@ -388,33 +388,4 @@ export function addToCart() {
 
     sleep(THINK_TIME.LOW);
     viewCart();
-
-    sleep(THINK_TIME.MEDIUM);
-}
-
-export function updateCart() {
-
-}
-
-function getSearchTerm(slice = 0) {
-    let searchTerms = [
-        "jeans",
-        "shirt",
-        "laptop",
-        "sweater",
-        "shoes",
-        "notebook",
-        "samsung",
-        "vector",
-        "hummingbird",
-        "mountain"
-    ]
-
-    let searchTerm = get_random(searchTerms);
-
-    if (slice === 0) {
-        return searchTerm;
-    }
-
-    return searchTerm.slice(0, slice);
 }

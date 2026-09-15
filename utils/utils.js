@@ -42,3 +42,26 @@ export function logRequest(res) {
 export function get_random(list) {
     return list[Math.floor((Math.random() * list.length))];
 }
+
+export function getSearchTerm(slice = 0) {
+    let searchTerms = [
+        "jeans",
+        "shirt",
+        "laptop",
+        "sweater",
+        "shoes",
+        "notebook",
+        "samsung",
+        "vector",
+        "hummingbird",
+        "mountain"
+    ]
+
+    let searchTerm = get_random(searchTerms);
+
+    if (slice === 0) {
+        return searchTerm;
+    }
+
+    return searchTerm.slice(0, slice);
+}
